@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy src
+      - run: uv run pytest -m "not sandbox" --cov --cov-report=term-missing
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync
+      - name: Start the epoint sandbox
+        run: |
+          docker run -d --name sandbox -p 8181:8181 ghcr.io/martian56/epoint-sandbox:latest
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8181/api/heartbeat > /dev/null; then
+              echo "sandbox is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "sandbox did not become healthy"
+          docker logs sandbox
+          exit 1
+      - run: uv run pytest -m sandbox
+        env:
+          EPOINT_BASE_URL: http://localhost:8181
