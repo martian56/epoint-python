@@ -1,6 +1,6 @@
 [project]
 name = "epoint"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python client for the epoint.az payment gateway"
 readme = "README.md"
 requires-python = ">=3.10"
