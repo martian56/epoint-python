@@ -28,6 +28,7 @@ Sandbox = "https://github.com/martian56/epoint-sandbox"
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=1.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
     "mypy>=1.19.0",
@@ -58,4 +59,5 @@ files = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = ["sandbox: needs a running epoint sandbox on EPOINT_BASE_URL"]

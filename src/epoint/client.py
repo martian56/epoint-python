@@ -1,24 +1,19 @@
 from __future__ import annotations
 
 import os
-from decimal import Decimal
 from types import TracebackType
 from typing import Any
 
 import httpx
 
+from . import _endpoints as ep
 from . import _transport
+from ._endpoints import Amount, Defaults
 from .callbacks import verify_callback
 from .errors import TransportError
 from .models import Callback, Response
 
-Amount = int | float | str | Decimal
-
 PRODUCTION_URL = "https://epoint.az"
-
-
-def _money(value: Amount) -> str:
-    return f"{Decimal(str(value)):.2f}"
 
 
 class EpointClient:
@@ -46,8 +41,6 @@ class EpointClient:
 
     @classmethod
     def from_env(cls, **overrides: Any) -> EpointClient:
-        public_key = os.environ["EPOINT_PUBLIC_KEY"]
-        private_key = os.environ["EPOINT_PRIVATE_KEY"]
         params: dict[str, Any] = {
             "base_url": os.environ.get("EPOINT_BASE_URL", PRODUCTION_URL),
             "language": os.environ.get("EPOINT_LANGUAGE", "az"),
@@ -55,15 +48,15 @@ class EpointClient:
             "error_redirect_url": os.environ.get("EPOINT_FAILED_REDIRECT_URL"),
         }
         params.update(overrides)
-        return cls(public_key, private_key, **params)
+        return cls(os.environ["EPOINT_PUBLIC_KEY"], os.environ["EPOINT_PRIVATE_KEY"], **params)
 
-    def _redirects(self, success: str | None, error: str | None) -> dict[str, str | None]:
-        return {
-            "success_redirect_url": success or self.success_redirect_url,
-            "error_redirect_url": error or self.error_redirect_url,
-        }
+    @property
+    def _defaults(self) -> Defaults:
+        return Defaults(
+            self.language, self.currency, self.success_redirect_url, self.error_redirect_url
+        )
 
-    def _send(self, method: str, path: str, **kwargs: Any) -> Any:
+    def _send(self, method: str, path: str, **kwargs: Any) -> tuple[int, Any]:
         try:
             response = self._http.request(method, f"{self.base_url}{path}", **kwargs)
         except httpx.HTTPError as exc:
@@ -79,8 +72,7 @@ class EpointClient:
 
     def _post(self, path: str, payload: dict[str, Any]) -> Response:
         form = _transport.build_form(self.public_key, self.private_key, payload)
-        status, body = self._send("POST", path, data=form)
-        return _transport.parse(status, body)
+        return _transport.parse(*self._send("POST", path, data=form))
 
     def _post_raw(self, path: str, payload: dict[str, Any]) -> Any:
         form = _transport.build_form(self.public_key, self.private_key, payload)
@@ -91,8 +83,7 @@ class EpointClient:
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> Response:
         form = _transport.build_json(self.public_key, self.private_key, payload)
-        status, body = self._send("POST", path, json=form)
-        return _transport.parse(status, body)
+        return _transport.parse(*self._send("POST", path, json=form))
 
     def create_payment(
         self,
@@ -108,16 +99,17 @@ class EpointClient:
     ) -> Response:
         """Start a payment and return the redirect URL the customer should be sent to."""
         return self._post(
-            "/api/1/request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.create_payment(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
         )
 
     def create_payment_request(
@@ -134,16 +126,17 @@ class EpointClient:
     ) -> Response:
         """Same as create_payment, for the payment types epoint documents separately."""
         return self._post(
-            "/api/1/payment-request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.create_payment_request(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
         )
 
     def create_amex_payment(
@@ -160,16 +153,17 @@ class EpointClient:
     ) -> Response:
         """Start an American Express payment. Needs AMEX enabled on the account."""
         return self._post(
-            "/api/1/amex-request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.create_amex_payment(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
         )
 
     def change_payment_sum(
@@ -186,21 +180,57 @@ class EpointClient:
     ) -> Response:
         """Re-price an order before the customer pays."""
         return self._post(
-            "/api/1/payment-change-sum",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.change_payment_sum(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
         )
+
+    def reserve(
+        self,
+        amount: Amount,
+        order_id: str,
+        *,
+        description: str | None = None,
+        language: str | None = None,
+        currency: str | None = None,
+        success_redirect_url: str | None = None,
+        error_redirect_url: str | None = None,
+        other_attr: Any = None,
+    ) -> Response:
+        """Reserve funds without capturing them. Complete later with capture."""
+        return self._post(
+            *ep.reserve(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
+        )
+
+    def capture(self, transaction: str, amount: Amount) -> Response:
+        """Capture a previously reserved amount, in full or in part."""
+        return self._post(*ep.capture(transaction, amount))
 
     def get_status(self, transaction: str) -> Response:
         """Look up a transaction by its epoint id."""
-        return self._post("/api/1/get-status", {"transaction": transaction})
+        return self._post(*ep.get_status(transaction))
+
+    def get_card_status(self, card_id: str) -> Response:
+        """Look up a saved card by its id."""
+        return self._post(*ep.get_card_status(card_id))
 
     def create_split_payment(
         self,
@@ -218,18 +248,19 @@ class EpointClient:
     ) -> Response:
         """Start a payment split with another epoint account."""
         return self._post(
-            "/api/1/split-request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "split_user": split_account,
-                "split_amount": _money(split_amount),
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.create_split_payment(
+                self._defaults,
+                amount,
+                order_id,
+                split_account,
+                split_amount,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
         )
 
     def split_charge_saved_card(
@@ -246,50 +277,17 @@ class EpointClient:
     ) -> Response:
         """Charge a saved card and split the amount with another account."""
         return self._post(
-            "/api/1/split-execute-pay",
-            {
-                "card_id": card_id,
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "split_user": split_account,
-                "split_amount": _money(split_amount),
-                "description": description,
-            },
-        )
-
-    def reserve(
-        self,
-        amount: Amount,
-        order_id: str,
-        *,
-        description: str | None = None,
-        language: str | None = None,
-        currency: str | None = None,
-        success_redirect_url: str | None = None,
-        error_redirect_url: str | None = None,
-        other_attr: Any = None,
-    ) -> Response:
-        """Reserve funds without capturing them. Complete later with capture."""
-        return self._post(
-            "/api/1/pre-auth-request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                "other_attr": other_attr,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
-        )
-
-    def capture(self, transaction: str, amount: Amount) -> Response:
-        """Capture a previously reserved amount, in full or in part."""
-        return self._post(
-            "/api/1/pre-auth-complete",
-            {"transaction": transaction, "amount": _money(amount)},
+            *ep.split_charge_saved_card(
+                self._defaults,
+                card_id,
+                amount,
+                order_id,
+                split_account,
+                split_amount,
+                description,
+                language,
+                currency,
+            )
         )
 
     def register_card(
@@ -300,14 +298,7 @@ class EpointClient:
         for_payouts: bool = False,
     ) -> Response:
         """Start card registration. The customer confirms it on the checkout page."""
-        return self._post(
-            "/api/1/card-registration",
-            {
-                "language": language or self.language,
-                "refund": 1 if for_payouts else 0,
-                "description": description,
-            },
-        )
+        return self._post(*ep.register_card(self._defaults, description, language, for_payouts))
 
     def register_card_and_pay(
         self,
@@ -322,15 +313,16 @@ class EpointClient:
     ) -> Response:
         """Charge the customer and register the card in one step."""
         return self._post(
-            "/api/1/card-registration-with-pay",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.register_card_and_pay(
+                self._defaults,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+            )
         )
 
     def charge_saved_card(
@@ -345,20 +337,16 @@ class EpointClient:
     ) -> Response:
         """Charge a card the customer registered earlier."""
         return self._post(
-            "/api/1/execute-pay",
-            {
-                "card_id": card_id,
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-            },
+            *ep.charge_saved_card(
+                self._defaults,
+                card_id,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+            )
         )
-
-    def get_card_status(self, card_id: str) -> Response:
-        """Look up a saved card by its id."""
-        return self._post("/api/1/get-status-card", {"card_id": card_id})
 
     def refund(
         self,
@@ -372,15 +360,15 @@ class EpointClient:
     ) -> Response:
         """Refund to a saved card, or pay out if the card was registered for payouts."""
         return self._post(
-            "/api/1/refund-request",
-            {
-                "card_id": card_id,
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-            },
+            *ep.refund(
+                self._defaults,
+                card_id,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+            )
         )
 
     def reverse(
@@ -392,15 +380,7 @@ class EpointClient:
         currency: str | None = None,
     ) -> Response:
         """Cancel a settled payment, in full or in part."""
-        return self._post(
-            "/api/1/reverse",
-            {
-                "transaction": transaction,
-                "amount": _money(amount) if amount is not None else None,
-                "currency": currency or self.currency,
-                "language": language or self.language,
-            },
-        )
+        return self._post(*ep.reverse(self._defaults, transaction, amount, language, currency))
 
     def get_installment_plans(
         self,
@@ -412,13 +392,13 @@ class EpointClient:
     ) -> list[dict[str, Any]]:
         """List the installment plans available for an order."""
         result = self._post_raw(
-            "/api/1/get-installment-request",
-            {
-                "order_id": order_id,
-                "amount": _money(amount) if amount is not None else None,
-                "currency": currency or self.currency,
-                "language": language or self.language,
-            },
+            *ep.get_installment_plans(
+                self._defaults,
+                order_id,
+                amount,
+                language,
+                currency,
+            )
         )
         return list(result) if isinstance(result, list) else []
 
@@ -437,17 +417,18 @@ class EpointClient:
     ) -> Response:
         """Start an installment payment on a chosen plan."""
         return self._post(
-            "/api/1/installment-request",
-            {
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "installment_card_id": installment_card_id,
-                "installment_month": installment_month,
-                "description": description,
-                **self._redirects(success_redirect_url, error_redirect_url),
-            },
+            *ep.pay_by_installment(
+                self._defaults,
+                amount,
+                order_id,
+                installment_card_id,
+                installment_month,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+            )
         )
 
     def list_wallets(self) -> dict[str, str]:
@@ -467,23 +448,20 @@ class EpointClient:
     ) -> Response:
         """Start a payment through a digital wallet."""
         return self._post(
-            "/api/1/wallet/payment",
-            {
-                "wallet_id": wallet_id,
-                "amount": _money(amount),
-                "currency": currency or self.currency,
-                "language": language or self.language,
-                "order_id": order_id,
-                "description": description,
-            },
+            *ep.pay_with_wallet(
+                self._defaults,
+                wallet_id,
+                amount,
+                order_id,
+                description,
+                language,
+                currency,
+            )
         )
 
     def create_widget(self, amount: Amount, order_id: str, description: str) -> Response:
         """Create an Apple Pay and Google Pay widget URL to embed in an iframe."""
-        return self._post(
-            "/api/1/token/widget",
-            {"amount": _money(amount), "order_id": order_id, "description": description},
-        )
+        return self._post(*ep.create_widget(amount, order_id, description))
 
     def create_invoice(
         self,
@@ -504,22 +482,21 @@ class EpointClient:
     ) -> Response:
         """Create a pay-by-link invoice."""
         return self._post(
-            "/api/1/invoices/create",
-            {
-                "sum": _money(amount),
-                "period_from": period_from,
-                "period_to": period_to,
-                "name": name,
-                "description": description,
-                "phone": phone,
-                "email": email,
-                "inn": tin,
-                "contract_number": contract_number,
-                "merchant_order_id": merchant_order_id,
-                "display": 1 if display else 0,
-                "save_as_template": 1 if save_as_template else 0,
-                "status_installment": 1 if allow_installment else 0,
-            },
+            *ep.create_invoice(
+                amount,
+                period_from,
+                period_to,
+                name,
+                description,
+                phone,
+                email,
+                tin,
+                contract_number,
+                merchant_order_id,
+                display,
+                save_as_template,
+                allow_installment,
+            )
         )
 
     def update_invoice(
@@ -539,37 +516,36 @@ class EpointClient:
     ) -> Response:
         """Update an invoice that is still waiting for payment."""
         return self._post(
-            "/api/1/invoices/update",
-            {
-                "id": invoice_id,
-                "sum": _money(amount),
-                "period_from": period_from,
-                "period_to": period_to,
-                "name": name,
-                "description": description,
-                "phone": phone,
-                "email": email,
-                "display": 1 if display else 0,
-                "save_as_template": 1 if save_as_template else 0,
-                "status_installment": 1 if allow_installment else 0,
-            },
+            *ep.update_invoice(
+                invoice_id,
+                amount,
+                period_from,
+                period_to,
+                name,
+                description,
+                phone,
+                email,
+                display,
+                save_as_template,
+                allow_installment,
+            )
         )
 
     def get_invoice(self, invoice_id: int) -> Response:
         """Look up an invoice by its id."""
-        return self._post("/api/1/invoices/view", {"id": invoice_id})
+        return self._post(*ep.get_invoice(invoice_id))
 
     def list_invoices(self, *, kind: str | None = None, order: str | None = None) -> Response:
         """List invoices on the account."""
-        return self._post("/api/1/invoices/list", {"type": kind, "order": order})
+        return self._post(*ep.list_invoices(kind, order))
 
     def send_invoice_sms(self, invoice_id: int, phone: str) -> Response:
         """Send an invoice to a phone number by SMS."""
-        return self._post("/api/1/invoices/send-sms", {"id": invoice_id, "phone": phone})
+        return self._post(*ep.send_invoice_sms(invoice_id, phone))
 
     def send_invoice_email(self, invoice_id: int, email: str) -> Response:
         """Send an invoice to an email address."""
-        return self._post("/api/1/invoices/send-email", {"id": invoice_id, "email": email})
+        return self._post(*ep.send_invoice_email(invoice_id, email))
 
     def create_bank_transfer(
         self,
@@ -589,32 +565,29 @@ class EpointClient:
     ) -> Response:
         """Send a B2B bank transfer to an IBAN."""
         return self._post_json(
-            "/api/1/b2b/payment",
-            {
-                "order_id": order_id,
-                "amount": _money(amount),
-                "description": description,
-                "iban": iban,
-                "name": name,
-                "tin": tin,
-                "bank_code": bank_code,
-                "bank_name": bank_name,
-                "email": email,
-                "address": address,
-                "additional_info": additional_info,
-                "webhook_url": webhook_url,
-            },
+            *ep.create_bank_transfer(
+                order_id,
+                amount,
+                description,
+                iban,
+                name,
+                tin,
+                bank_code,
+                bank_name,
+                email,
+                address,
+                additional_info,
+                webhook_url,
+            )
         )
 
     def get_bank_transfer(self, order_id: str) -> Response:
         """Look up a B2B bank transfer by its order id."""
-        status, body = self._send("GET", f"/api/1/b2b/payment/{order_id}")
-        return _transport.parse(status, body)
+        return _transport.parse(*self._send("GET", f"/api/1/b2b/payment/{order_id}"))
 
     def heartbeat(self) -> Response:
         """Check that the gateway is reachable."""
-        status, body = self._send("GET", "/api/heartbeat")
-        return _transport.parse(status, body)
+        return _transport.parse(*self._send("GET", "/api/heartbeat"))
 
     def verify_callback(self, data: str, signature: str) -> Callback:
         """Verify a callback's signature and return its decoded payload."""

@@ -4,6 +4,7 @@ Python client for the [epoint.az](https://epoint.az) payment gateway.
 
 Covers all 30 documented endpoints: payments, saved cards, refunds and payouts, split payments,
 pre-authorisation, installments, wallets, Apple Pay and Google Pay, invoices, and B2B transfers.
+Sync and async, fully typed, one dependency.
 
 ```bash
 pip install epoint
@@ -34,6 +35,20 @@ except SignatureError:
 if callback.ok:
     fulfil(callback.order_id, callback.transaction)
 ```
+
+## Async
+
+`AsyncEpointClient` has the same methods, awaited:
+
+```python
+from epoint import AsyncEpointClient
+
+async with AsyncEpointClient(public_key="i000000001", private_key="your-private-key") as client:
+    payment = await client.create_payment(amount=30.75, order_id="order-1")
+    status = await client.get_status(payment.transaction)
+```
+
+`verify_callback` stays synchronous on both clients, since it only does a signature check.
 
 ## Configuration
 
