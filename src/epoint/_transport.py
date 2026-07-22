@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import _signing
+from .enums import Status
 from .errors import GatewayError, TransportError
 from .models import Response
 
@@ -21,7 +22,7 @@ def parse(status_code: int, body: Any) -> Response:
     if not isinstance(body, dict):
         raise TransportError(f"unexpected response body: {body!r}", status_code=status_code)
 
-    if body.get("status") == "error":
+    if body.get("status") == Status.ERROR:
         raise GatewayError(
             str(body.get("message") or "request refused"),
             code=str(body["code"]) if body.get("code") is not None else None,
