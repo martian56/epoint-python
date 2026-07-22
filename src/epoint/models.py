@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .enums import SETTLED_STATUSES
+
 
 class Response:
     def __init__(self, raw: dict[str, Any]) -> None:
@@ -15,7 +17,7 @@ class Response:
 
     @property
     def ok(self) -> bool:
-        return self.raw.get("status") == "success"
+        return self.raw.get("status") in SETTLED_STATUSES
 
     @property
     def transaction(self) -> str | None:
@@ -63,7 +65,7 @@ class Callback:
 
     @property
     def ok(self) -> bool:
-        return self.status == "success"
+        return self.status in SETTLED_STATUSES
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Callback:

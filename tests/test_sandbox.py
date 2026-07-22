@@ -3,7 +3,7 @@ import uuid
 import httpx
 import pytest
 
-from epoint import EpointClient, GatewayError
+from epoint import CardStatus, EpointClient, GatewayError, Status
 
 pytestmark = pytest.mark.sandbox
 
@@ -144,3 +144,28 @@ def test_missing_required_field_is_refused(client):
     with pytest.raises(GatewayError) as info:
         client._post("/api/1/request", {"amount": "10.00", "currency": "AZN"})
     assert "order_id" in str(info.value)
+
+
+def test_the_statuses_the_sandbox_returns_are_all_in_the_enum(client, pay):
+    """Guards against the enum drifting away from what the API actually sends."""
+    paid = client.create_payment(amount=5, order_id=order())
+    pay(client, paid.redirect_url)
+
+    declined = client.create_payment(amount=5, order_id=order())
+    pay(client, declined.redirect_url, card="4000000000000116")
+
+    seen = {
+        client.get_status(paid.transaction).status,
+        client.get_status(declined.transaction).status,
+    }
+    assert seen == {Status.SUCCESS, Status.FAILED}
+    assert all(s in set(Status) for s in seen)
+
+
+def test_a_card_status_from_the_sandbox_is_in_the_enum(client, pay):
+    registered = client.register_card(description="enum check")
+    pay(client, registered.redirect_url)
+
+    card = client.get_card_status(registered["card_id"])
+    assert card.get("status") == CardStatus.ACTIVE
+    assert card.get("status") in set(CardStatus)

@@ -148,3 +148,20 @@ def test_b2b_is_sent_as_json():
     assert "application/json" in seen["content_type"]
     assert "data" in seen["body"]
     assert "signature" in seen["body"]
+
+
+def test_enums_go_over_the_wire_as_plain_strings():
+    from epoint import Currency, Language, OperationCode, Status
+
+    assert json.dumps({"language": Language.AZ, "currency": Currency.AZN}) == (
+        '{"language": "az", "currency": "AZN"}'
+    )
+    assert OperationCode.PAYMENT == "100"
+    assert "success" in {Status.SUCCESS, Status.NEW}
+
+
+def test_a_raw_status_string_still_reads_as_ok():
+    from epoint.models import Response
+
+    assert Response({"status": "success"}).ok
+    assert not Response({"status": "failed"}).ok

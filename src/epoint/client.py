@@ -10,6 +10,7 @@ from . import _endpoints as ep
 from . import _transport
 from ._endpoints import Amount, Defaults
 from .callbacks import verify_callback
+from .enums import Currency, Language
 from .errors import TransportError
 from .models import Callback, Response
 
@@ -23,8 +24,8 @@ class EpointClient:
         private_key: str,
         *,
         base_url: str = PRODUCTION_URL,
-        language: str = "az",
-        currency: str = "AZN",
+        language: str = Language.AZ,
+        currency: str = Currency.AZN,
         success_redirect_url: str | None = None,
         error_redirect_url: str | None = None,
         timeout: float = 30.0,
@@ -43,7 +44,7 @@ class EpointClient:
     def from_env(cls, **overrides: Any) -> EpointClient:
         params: dict[str, Any] = {
             "base_url": os.environ.get("EPOINT_BASE_URL", PRODUCTION_URL),
-            "language": os.environ.get("EPOINT_LANGUAGE", "az"),
+            "language": os.environ.get("EPOINT_LANGUAGE", Language.AZ),
             "success_redirect_url": os.environ.get("EPOINT_SUCCESS_REDIRECT_URL"),
             "error_redirect_url": os.environ.get("EPOINT_FAILED_REDIRECT_URL"),
         }
