@@ -19,7 +19,7 @@ from .enums import (
 from .errors import EpointError, GatewayError, SignatureError, TransportError
 from .models import Callback, Response
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "AZN_ONLY",
