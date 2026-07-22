@@ -92,7 +92,7 @@ Most methods return a `Response`. Read known fields as attributes, anything else
 
 ```python
 r = client.get_status("te0000000001")
-r.status         # "success"
+r.status         # "success", compares equal to Status.SUCCESS
 r.ok             # True
 r.get("rrn")     # bank reference number
 r.raw            # the full response dict
@@ -100,6 +100,39 @@ r.raw            # the full response dict
 
 `create_payment`, `reserve`, `create_split_payment` and the other checkout methods return
 `redirect_url`. `get_installment_plans` returns a list and `list_wallets` returns a dict.
+
+## Enums
+
+Every value the API uses has an enum. They come from the sandbox's own definitions, so they match
+what production sends. Members are `str` subclasses, so they go over the wire unchanged and
+compare equal to the raw value; a plain string still works anywhere an enum is accepted.
+
+```python
+from epoint import CardStatus, Currency, EpointClient, Language, Status
+
+client = EpointClient.from_env(language=Language.EN, currency=Currency.USD)
+
+status = client.get_status(transaction)
+if status.status == Status.SUCCESS:
+    fulfil(order_id)
+```
+
+| Enum | Values |
+|---|---|
+| `Status` | new, success, failed, error, returned, server_error |
+| `CardStatus` | new, active, pending, rejected, expired, session_expired |
+| `InvoiceStatus` | waiting_for_payment, paid, canceled |
+| `B2BStatus` | PENDING, PROCESSING, SUCCESS, FAILED |
+| `OperationCode` | 001 card registration, 100 payment, 200 registration with payment |
+| `Language` | az, en, ru |
+| `Currency` | AZN, USD, EUR, RUB |
+
+Currency is not uniform across the API. Checkout takes all four, but split, pre-auth, refund,
+reverse, payout and wallet take AZN and nothing else. `SUPPORTED_CURRENCIES` and `AZN_ONLY` hold
+those two sets.
+
+`SETTLED_STATUSES` is what `ok` checks, and `USABLE_CARD_STATUSES` is the set a card has to be in
+before you can charge it.
 
 ## Methods
 
