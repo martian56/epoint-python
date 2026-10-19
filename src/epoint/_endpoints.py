@@ -277,7 +277,12 @@ def split_charge_saved_card(
 
 
 def register_card(
-    d: Defaults, description: str | None, language: str | None, for_payouts: bool
+    d: Defaults,
+    description: str | None,
+    language: str | None,
+    for_payouts: bool,
+    success_redirect_url: str | None = None,
+    error_redirect_url: str | None = None,
 ) -> Call:
     return Call(
         "/api/1/card-registration",
@@ -285,6 +290,8 @@ def register_card(
             "language": language or d.language,
             "refund": 1 if for_payouts else 0,
             "description": description,
+            "success_redirect_url": success_redirect_url or d.success_redirect_url,
+            "error_redirect_url": error_redirect_url or d.error_redirect_url,
         },
     )
 
