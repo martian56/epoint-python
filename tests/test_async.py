@@ -39,6 +39,26 @@ async def test_request_is_signed_and_parsed():
     assert seen["payload"]["amount"] == "12.50"
 
 
+async def test_card_registration_sends_the_redirect_urls():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        form = httpx.QueryParams(request.content.decode())
+        seen["payload"] = json.loads(base64.b64decode(form["data"]))
+        return httpx.Response(200, json={"status": "success", "card_id": "ce1"})
+
+    async with async_client_with(handler) as client:
+        result = await client.register_card(
+            description="async",
+            success_redirect_url="https://shop.test/ok",
+            error_redirect_url="https://shop.test/fail",
+        )
+
+    assert result["card_id"] == "ce1"
+    assert seen["payload"]["success_redirect_url"] == "https://shop.test/ok"
+    assert seen["payload"]["error_redirect_url"] == "https://shop.test/fail"
+
+
 async def test_error_status_raises():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "error", "message": "bad", "code": "100"})

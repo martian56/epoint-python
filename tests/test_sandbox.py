@@ -169,3 +169,33 @@ def test_a_card_status_from_the_sandbox_is_in_the_enum(client, pay):
     card = client.get_card_status(registered["card_id"])
     assert card.get("status") == CardStatus.ACTIVE
     assert card.get("status") in set(CardStatus)
+
+
+def test_card_registration_returns_the_customer_to_the_given_urls(client):
+    approved = client.register_card(
+        description="redirect check",
+        success_redirect_url="https://shop.test/card-ok",
+        error_redirect_url="https://shop.test/card-fail",
+    )
+    declined = client.register_card(
+        description="redirect check",
+        success_redirect_url="https://shop.test/card-ok",
+        error_redirect_url="https://shop.test/card-fail",
+    )
+
+    def submit(redirect_url: str, card: str) -> httpx.Response:
+        token = redirect_url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        return httpx.post(
+            f"{SANDBOX_URL}/checkout/{token}",
+            data={"card_number": card, "card_holder": "TESTER", "month": "12", "year": "30"},
+            follow_redirects=False,
+        )
+
+    ok = submit(approved.redirect_url, "4111111111111111")
+    failed = submit(declined.redirect_url, "4000000000000116")
+
+    assert ok.status_code == 303
+    assert ok.headers["location"] == "https://shop.test/card-ok"
+    assert failed.status_code == 303
+    assert failed.headers["location"] == "https://shop.test/card-fail"
+    assert client.get_card_status(approved["card_id"]).get("status") == CardStatus.ACTIVE

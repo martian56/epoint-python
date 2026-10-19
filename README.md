@@ -134,6 +134,24 @@ those two sets.
 `SETTLED_STATUSES` is what `ok` checks, and `USABLE_CARD_STATUSES` is the set a card has to be in
 before you can charge it.
 
+## Saving a card without a payment
+
+`register_card` saves a card with no charge, for example when the first period is free and later
+ones are charged with `charge_saved_card`. Keep the `card_id` it returns and send the customer to
+its `redirect_url`.
+
+```python
+registration = client.register_card(
+    description="Card for renewals",
+    success_redirect_url="https://shop.example/card/saved",
+    error_redirect_url="https://shop.example/card/failed",
+)
+store_card(registration["card_id"])
+```
+
+The customer comes back to `success_redirect_url` or `error_redirect_url`, or to the client's own
+defaults when neither is given. A card can be charged once `get_card_status` reports it `active`.
+
 ## Methods
 
 | Group | Methods |

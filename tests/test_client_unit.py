@@ -165,3 +165,50 @@ def test_a_raw_status_string_still_reads_as_ok():
 
     assert Response({"status": "success"}).ok
     assert not Response({"status": "failed"}).ok
+
+
+def test_card_registration_sends_the_redirect_urls_it_is_given():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload, _ = decode_sent(request)
+        seen.update(payload)
+        return httpx.Response(200, json={"status": "success", "card_id": "ce1"})
+
+    client_with(handler).register_card(
+        success_redirect_url="https://shop.test/ok",
+        error_redirect_url="https://shop.test/fail",
+    )
+    assert seen["success_redirect_url"] == "https://shop.test/ok"
+    assert seen["error_redirect_url"] == "https://shop.test/fail"
+    assert seen["refund"] == 0
+
+
+def test_card_registration_falls_back_to_the_client_redirect_urls():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload, _ = decode_sent(request)
+        seen.clear()
+        seen.update(payload)
+        return httpx.Response(200, json={"status": "success", "card_id": "ce1"})
+
+    client = EpointClient(
+        PUBLIC_KEY,
+        PRIVATE_KEY,
+        base_url="https://epoint.test",
+        success_redirect_url="https://shop.test/default-ok",
+        error_redirect_url="https://shop.test/default-fail",
+        transport=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    client.register_card()
+    assert seen["success_redirect_url"] == "https://shop.test/default-ok"
+    assert seen["error_redirect_url"] == "https://shop.test/default-fail"
+
+    client.register_card(success_redirect_url="https://shop.test/ok")
+    assert seen["success_redirect_url"] == "https://shop.test/ok"
+    assert seen["error_redirect_url"] == "https://shop.test/default-fail"
+
+    client_with(handler).register_card()
+    assert "success_redirect_url" not in seen
+    assert "error_redirect_url" not in seen

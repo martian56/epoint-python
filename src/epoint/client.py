@@ -297,9 +297,20 @@ class EpointClient:
         description: str | None = None,
         language: str | None = None,
         for_payouts: bool = False,
+        success_redirect_url: str | None = None,
+        error_redirect_url: str | None = None,
     ) -> Response:
         """Start card registration. The customer confirms it on the checkout page."""
-        return self._post(*ep.register_card(self._defaults, description, language, for_payouts))
+        return self._post(
+            *ep.register_card(
+                self._defaults,
+                description,
+                language,
+                for_payouts,
+                success_redirect_url,
+                error_redirect_url,
+            )
+        )
 
     def register_card_and_pay(
         self,
