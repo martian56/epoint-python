@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- `register_card` takes `success_redirect_url` and `error_redirect_url`, so a card saved without
+  a payment returns the customer to your own page. Without them it uses the client's defaults, as
+  the pay methods do. This applies to `EpointClient` and `AsyncEpointClient`.
+
 ## 0.2.1
 
 - The README documents the enums and uses them in its examples, instead of the bare strings it
