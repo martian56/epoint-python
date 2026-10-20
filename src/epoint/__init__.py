@@ -21,7 +21,7 @@ from .enums import (
 from .errors import EpointError, GatewayError, SignatureError, TransportError
 from .models import B2BWebhook, Callback, CheckoutForm, Response
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "AZN_ONLY",
