@@ -54,6 +54,16 @@ class B2BStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class B2BWebhookStatus(StrEnum):
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+HEARTBEAT_OK = "ok"
+
+OK_STATUSES = frozenset({Status.SUCCESS.value, B2BStatus.SUCCESS.value, HEARTBEAT_OK})
+
+
 class OperationCode(StrEnum):
     """What the transaction did, as it comes back on a callback."""
 

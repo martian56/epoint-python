@@ -52,6 +52,12 @@ def _checkout(
     return Call(path, payload)
 
 
+def _flag(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    return 1 if value else 0
+
+
 def create_payment(
     d: Defaults,
     amount: Amount,
@@ -62,6 +68,7 @@ def create_payment(
     success_redirect_url: str | None,
     error_redirect_url: str | None,
     other_attr: Any,
+    is_installment: bool | None = None,
 ) -> Call:
     return _checkout(
         d,
@@ -74,6 +81,34 @@ def create_payment(
         success_redirect_url,
         error_redirect_url,
         other_attr,
+        extra={"is_installment": _flag(is_installment)},
+    )
+
+
+def checkout_form(
+    d: Defaults,
+    amount: Amount,
+    order_id: str,
+    description: str | None,
+    language: str | None,
+    currency: str | None,
+    success_redirect_url: str | None,
+    error_redirect_url: str | None,
+    other_attr: Any,
+    is_installment: bool | None = None,
+) -> Call:
+    return _checkout(
+        d,
+        "/api/1/checkout",
+        amount,
+        order_id,
+        description,
+        language,
+        currency,
+        success_redirect_url,
+        error_redirect_url,
+        other_attr,
+        extra={"is_installment": _flag(is_installment)},
     )
 
 
@@ -87,6 +122,7 @@ def create_payment_request(
     success_redirect_url: str | None,
     error_redirect_url: str | None,
     other_attr: Any,
+    is_installment: bool | None = None,
 ) -> Call:
     return _checkout(
         d,
@@ -99,6 +135,7 @@ def create_payment_request(
         success_redirect_url,
         error_redirect_url,
         other_attr,
+        extra={"is_installment": _flag(is_installment)},
     )
 
 
@@ -205,6 +242,34 @@ def create_split_payment(
     )
 
 
+def create_token_split_payment(
+    d: Defaults,
+    amount: Amount,
+    order_id: str,
+    split_account: str,
+    split_amount: Amount,
+    description: str | None,
+    language: str | None,
+    currency: str | None,
+    success_redirect_url: str | None,
+    error_redirect_url: str | None,
+    other_attr: Any,
+) -> Call:
+    return _checkout(
+        d,
+        "/api/1/token/split-payment",
+        amount,
+        order_id,
+        description,
+        language,
+        currency,
+        success_redirect_url,
+        error_redirect_url,
+        other_attr,
+        extra={"split_user": split_account, "split_amount": money(split_amount)},
+    )
+
+
 def pay_by_installment(
     d: Defaults,
     amount: Amount,
@@ -216,6 +281,7 @@ def pay_by_installment(
     currency: str | None,
     success_redirect_url: str | None,
     error_redirect_url: str | None,
+    other_attr: Any = None,
 ) -> Call:
     return _checkout(
         d,
@@ -227,7 +293,7 @@ def pay_by_installment(
         currency,
         success_redirect_url,
         error_redirect_url,
-        None,
+        other_attr,
         extra={
             "installment_card_id": installment_card_id,
             "installment_month": installment_month,
@@ -383,7 +449,13 @@ def reverse(
 
 
 def get_installment_plans(
-    d: Defaults, order_id: str, amount: Amount | None, language: str | None, currency: str | None
+    d: Defaults,
+    order_id: str,
+    amount: Amount | None,
+    language: str | None,
+    currency: str | None,
+    description: str | None = None,
+    other_attr: Any = None,
 ) -> Call:
     return Call(
         "/api/1/get-installment-request",
@@ -392,6 +464,8 @@ def get_installment_plans(
             "amount": money(amount) if amount is not None else None,
             "currency": currency or d.currency,
             "language": language or d.language,
+            "description": description,
+            "other_attr": other_attr,
         },
     )
 
@@ -500,6 +574,9 @@ def update_invoice(
     display: bool,
     save_as_template: bool,
     allow_installment: bool,
+    tin: str | None = None,
+    contract_number: str | None = None,
+    merchant_order_id: str | None = None,
 ) -> Call:
     payload = _invoice(
         amount,
@@ -512,7 +589,12 @@ def update_invoice(
         display,
         save_as_template,
         allow_installment,
-        {"id": invoice_id},
+        {
+            "id": invoice_id,
+            "inn": tin,
+            "contract_number": contract_number,
+            "merchant_order_id": merchant_order_id,
+        },
     )
     return Call("/api/1/invoices/update", payload)
 
@@ -546,6 +628,7 @@ def create_bank_transfer(
     address: str | None,
     additional_info: str | None,
     webhook_url: str | None,
+    bulk_description: str | None = None,
 ) -> Call:
     return Call(
         "/api/1/b2b/payment",
@@ -562,5 +645,6 @@ def create_bank_transfer(
             "address": address,
             "additional_info": additional_info,
             "webhook_url": webhook_url,
+            "bulk_description": bulk_description,
         },
     )

@@ -199,3 +199,151 @@ def test_card_registration_returns_the_customer_to_the_given_urls(client):
     assert failed.status_code == 303
     assert failed.headers["location"] == "https://shop.test/card-fail"
     assert client.get_card_status(approved["card_id"]).get("status") == CardStatus.ACTIVE
+
+
+def enable_token_payments(client: EpointClient) -> None:
+    httpx.patch(
+        f"{client.base_url}/_sandbox/merchants/{client.public_key}",
+        json={"token_payments_enabled": True},
+    )
+
+
+def transaction_for(client: EpointClient, order_id: str) -> str:
+    rows = httpx.get(
+        f"{client.base_url}/_sandbox/transactions",
+        params={"merchant": client.public_key, "limit": 200},
+    ).json()
+    return next(row["transaction"] for row in rows if row["order_id"] == order_id)
+
+
+def test_a_payment_that_ended_in_error_reads_back_without_raising(client, pay):
+    created = client.create_payment(amount=5, order_id=order())
+    pay(client, created.redirect_url, card="4000000000009998")
+
+    status = client.get_status(created.transaction)
+    assert status.status == Status.ERROR
+    assert status.message == "An error occurred during payment"
+    assert status.code == ""
+    assert status.transaction == created.transaction
+    assert not status.ok
+
+
+def test_an_unknown_transaction_still_raises(client):
+    with pytest.raises(GatewayError):
+        client.get_status("te9999999999")
+
+
+def test_server_error_and_returned_read_back(client, pay):
+    timed_out = client.create_payment(amount=5, order_id=order())
+    pay(client, timed_out.redirect_url, card="4000000000009999")
+    server_error = client.get_status(timed_out.transaction)
+    assert server_error.status == Status.SERVER_ERROR
+    assert not server_error.ok
+
+    paid = client.create_payment(amount=5, order_id=order())
+    pay(client, paid.redirect_url)
+    client.reverse(paid.transaction)
+    returned = client.get_status(paid.transaction)
+    assert returned.status == Status.RETURNED
+    assert not returned.ok
+
+
+def test_typed_fields_read_from_a_settled_payment(client, pay):
+    order_id = order()
+    created = client.create_payment(amount=25.5, order_id=order_id)
+    assert created.trace_id
+    pay(client, created.redirect_url)
+
+    status = client.get_status(created.transaction)
+    assert status.ok
+    assert status.code == "000"
+    assert status.bank_response == "000"
+    assert status.bank_transaction
+    assert status.operation_code == "100"
+    assert status.rrn
+    assert status.card_mask == "411111******1111"
+    assert status.card_name == "TESTER"
+    assert status.amount == 25.5
+    assert status.trace_id
+
+
+def test_token_split_payment(client, pay):
+    enable_token_payments(client)
+    created = client.create_token_split_payment(
+        amount=100, order_id=order(), split_account=PARTNER_KEY, split_amount=30
+    )
+    assert created.ok
+    assert created.redirect_url
+    assert created.transaction
+    assert created.trace_id
+
+    pay(client, created.redirect_url)
+    assert client.get_status(created.transaction).status == Status.SUCCESS
+
+
+def test_token_split_payment_with_an_unknown_split_user_is_refused(client):
+    enable_token_payments(client)
+    with pytest.raises(GatewayError) as info:
+        client.create_token_split_payment(
+            amount=100, order_id=order(), split_account="i000009999", split_amount=30
+        )
+    assert "split_user" in str(info.value)
+
+
+def test_checkout_form_posts_to_the_card_page(client, pay):
+    order_id = order()
+    form = client.checkout_form(amount=12.5, order_id=order_id, is_installment=False)
+    assert form.url == f"{SANDBOX_URL}/api/1/checkout"
+
+    answer = httpx.post(form.url, data=form.fields, follow_redirects=False)
+    assert answer.status_code == 303
+    location = answer.headers["location"]
+    assert "/checkout/" in location
+
+    pay(client, location)
+    status = client.get_status(transaction_for(client, order_id))
+    assert status.status == Status.SUCCESS
+    assert status.amount == 12.5
+
+
+def test_updated_invoice_keeps_tin_contract_and_merchant_order(client):
+    created = client.create_invoice(amount=10, period_from="2026-01-01", period_to="2026-12-31")
+    invoice_id = created["id"]
+    updated = client.update_invoice(
+        invoice_id,
+        amount=11,
+        period_from="2026-01-01",
+        period_to="2026-12-31",
+        tin="1234567892",
+        contract_number="C-77",
+        merchant_order_id="M-77",
+    )
+    assert updated.ok
+
+    invoice = client.get_invoice(invoice_id)["invoice"]
+    assert invoice["inn"] == "1234567892"
+    assert invoice["contract_number"] == "C-77"
+    assert invoice["merchant_order_id"] == "M-77"
+
+
+def test_new_optional_parameters_are_accepted(client, pay):
+    grant_all(client)
+    plans = client.get_installment_plans(
+        order_id=order(), amount=200, description="sofa", other_attr={"k": "v"}
+    )
+    assert plans
+
+    request = client.create_payment_request(amount=5, order_id=order(), is_installment=True)
+    assert request.redirect_url
+
+    transfer = client.create_bank_transfer(
+        order_id=order(),
+        amount=100,
+        description="fees",
+        iban="AZ21NABZ00000000137010001944",
+        name="Logistika MMC",
+        tin="1234567892",
+        bank_code="505141",
+        bulk_description="July payroll",
+    )
+    assert transfer.ok

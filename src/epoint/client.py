@@ -12,7 +12,7 @@ from ._endpoints import Amount, Defaults
 from .callbacks import verify_callback
 from .enums import Currency, Language
 from .errors import TransportError
-from .models import Callback, Response
+from .models import Callback, CheckoutForm, Response
 
 PRODUCTION_URL = "https://epoint.az"
 
@@ -71,9 +71,12 @@ class EpointClient:
             ) from exc
         return response.status_code, body
 
-    def _post(self, path: str, payload: dict[str, Any]) -> Response:
+    def _post(
+        self, path: str, payload: dict[str, Any], *, payment_status: bool = False
+    ) -> Response:
         form = _transport.build_form(self.public_key, self.private_key, payload)
-        return _transport.parse(*self._send("POST", path, data=form))
+        status, body = self._send("POST", path, data=form)
+        return _transport.parse(status, body, payment_status=payment_status)
 
     def _post_raw(self, path: str, payload: dict[str, Any]) -> Any:
         form = _transport.build_form(self.public_key, self.private_key, payload)
@@ -97,6 +100,7 @@ class EpointClient:
         success_redirect_url: str | None = None,
         error_redirect_url: str | None = None,
         other_attr: Any = None,
+        is_installment: bool | None = None,
     ) -> Response:
         """Start a payment and return the redirect URL the customer should be sent to."""
         return self._post(
@@ -110,8 +114,37 @@ class EpointClient:
                 success_redirect_url,
                 error_redirect_url,
                 other_attr,
+                is_installment,
             )
         )
+
+    def checkout_form(
+        self,
+        amount: Amount,
+        order_id: str,
+        *,
+        description: str | None = None,
+        language: str | None = None,
+        currency: str | None = None,
+        success_redirect_url: str | None = None,
+        error_redirect_url: str | None = None,
+        other_attr: Any = None,
+        is_installment: bool | None = None,
+    ) -> CheckoutForm:
+        path, payload = ep.checkout_form(
+            self._defaults,
+            amount,
+            order_id,
+            description,
+            language,
+            currency,
+            success_redirect_url,
+            error_redirect_url,
+            other_attr,
+            is_installment,
+        )
+        form = _transport.build_form(self.public_key, self.private_key, payload)
+        return CheckoutForm(f"{self.base_url}{path}", form["data"], form["signature"])
 
     def create_payment_request(
         self,
@@ -124,6 +157,7 @@ class EpointClient:
         success_redirect_url: str | None = None,
         error_redirect_url: str | None = None,
         other_attr: Any = None,
+        is_installment: bool | None = None,
     ) -> Response:
         """Same as create_payment, for the payment types epoint documents separately."""
         return self._post(
@@ -137,6 +171,7 @@ class EpointClient:
                 success_redirect_url,
                 error_redirect_url,
                 other_attr,
+                is_installment,
             )
         )
 
@@ -227,7 +262,7 @@ class EpointClient:
 
     def get_status(self, transaction: str) -> Response:
         """Look up a transaction by its epoint id."""
-        return self._post(*ep.get_status(transaction))
+        return self._post(*ep.get_status(transaction), payment_status=True)
 
     def get_card_status(self, card_id: str) -> Response:
         """Look up a saved card by its id."""
@@ -250,6 +285,36 @@ class EpointClient:
         """Start a payment split with another epoint account."""
         return self._post(
             *ep.create_split_payment(
+                self._defaults,
+                amount,
+                order_id,
+                split_account,
+                split_amount,
+                description,
+                language,
+                currency,
+                success_redirect_url,
+                error_redirect_url,
+                other_attr,
+            )
+        )
+
+    def create_token_split_payment(
+        self,
+        amount: Amount,
+        order_id: str,
+        split_account: str,
+        split_amount: Amount,
+        *,
+        description: str | None = None,
+        language: str | None = None,
+        currency: str | None = None,
+        success_redirect_url: str | None = None,
+        error_redirect_url: str | None = None,
+        other_attr: Any = None,
+    ) -> Response:
+        return self._post(
+            *ep.create_token_split_payment(
                 self._defaults,
                 amount,
                 order_id,
@@ -401,6 +466,8 @@ class EpointClient:
         amount: Amount | None = None,
         language: str | None = None,
         currency: str | None = None,
+        description: str | None = None,
+        other_attr: Any = None,
     ) -> list[dict[str, Any]]:
         """List the installment plans available for an order."""
         result = self._post_raw(
@@ -410,6 +477,8 @@ class EpointClient:
                 amount,
                 language,
                 currency,
+                description,
+                other_attr,
             )
         )
         return list(result) if isinstance(result, list) else []
@@ -426,6 +495,7 @@ class EpointClient:
         currency: str | None = None,
         success_redirect_url: str | None = None,
         error_redirect_url: str | None = None,
+        other_attr: Any = None,
     ) -> Response:
         """Start an installment payment on a chosen plan."""
         return self._post(
@@ -440,6 +510,7 @@ class EpointClient:
                 currency,
                 success_redirect_url,
                 error_redirect_url,
+                other_attr,
             )
         )
 
@@ -522,6 +593,9 @@ class EpointClient:
         description: str | None = None,
         phone: str | None = None,
         email: str | None = None,
+        tin: str | None = None,
+        contract_number: str | None = None,
+        merchant_order_id: str | None = None,
         display: bool = True,
         save_as_template: bool = False,
         allow_installment: bool = False,
@@ -540,6 +614,9 @@ class EpointClient:
                 display,
                 save_as_template,
                 allow_installment,
+                tin,
+                contract_number,
+                merchant_order_id,
             )
         )
 
@@ -574,6 +651,7 @@ class EpointClient:
         address: str | None = None,
         additional_info: str | None = None,
         webhook_url: str | None = None,
+        bulk_description: str | None = None,
     ) -> Response:
         """Send a B2B bank transfer to an IBAN."""
         return self._post_json(
@@ -590,6 +668,7 @@ class EpointClient:
                 address,
                 additional_info,
                 webhook_url,
+                bulk_description,
             )
         )
 

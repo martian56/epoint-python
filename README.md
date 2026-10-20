@@ -2,8 +2,9 @@
 
 Python client for the [epoint.az](https://epoint.az) payment gateway.
 
-Covers all 30 documented endpoints: payments, saved cards, refunds and payouts, split payments,
-pre-authorisation, installments, wallets, Apple Pay and Google Pay, invoices, and B2B transfers.
+Covers every documented endpoint: payments, the checkout form post, saved cards, refunds and
+payouts, split payments, pre-authorisation, installments, wallets, Apple Pay and Google Pay,
+invoices, and B2B transfers.
 Sync and async, fully typed, one dependency.
 
 ```bash
@@ -94,8 +95,32 @@ Most methods return a `Response`. Read known fields as attributes, anything else
 r = client.get_status("te0000000001")
 r.status         # "success", compares equal to Status.SUCCESS
 r.ok             # True
-r.get("rrn")     # bank reference number
+r.rrn            # bank reference number
+r.amount         # 25.5, a float
 r.raw            # the full response dict
+```
+
+Typed attributes: `status`, `ok`, `transaction`, `redirect_url`, `message`, `trace_id`, `code`,
+`bank_transaction`, `bank_response`, `operation_code`, `rrn`, `card_name`, `card_mask`, `amount`,
+`card_id`, `order_id` and `widget_url`. Each is `None` when the response does not carry the field.
+Text fields come back as `str`. `amount` is a `float` and accepts a number or a numeric string
+from the API; anything else reads as `None`. `get`, `[]` and `raw` still give the value as sent.
+
+`ok` is true for `success`, for the B2B `SUCCESS` and for the heartbeat's `ok`, the values in
+`OK_STATUSES`. It is false for `error`, `failed`, `server_error`, `returned` and everything else.
+
+### Payments that ended in error
+
+`get_status` returns a payment whose status is `error` instead of raising. The rule is exact: on
+`get_status`, a 2xx response whose body has `status: "error"` and a `transaction` field is a
+payment state and comes back as a `Response`. Any other `status: "error"` body, such as an unknown
+transaction, and any `4xx` or `5xx` answer still raise. Every other method raises on
+`status: "error"` as before.
+
+```python
+status = client.get_status(transaction)
+if status.status == Status.ERROR:
+    retry_later(status.order_id)
 ```
 
 `create_payment`, `reserve`, `create_split_payment` and the other checkout methods return
@@ -123,6 +148,7 @@ if status.status == Status.SUCCESS:
 | `CardStatus` | new, active, pending, rejected, expired, session_expired |
 | `InvoiceStatus` | waiting_for_payment, paid, canceled |
 | `B2BStatus` | PENDING, PROCESSING, SUCCESS, FAILED |
+| `B2BWebhookStatus` | success, failed |
 | `OperationCode` | 001 card registration, 100 payment, 200 registration with payment |
 | `Language` | az, en, ru |
 | `Currency` | AZN, USD, EUR, RUB |
@@ -131,8 +157,8 @@ Currency is not uniform across the API. Checkout takes all four, but split, pre-
 reverse, payout and wallet take AZN and nothing else. `SUPPORTED_CURRENCIES` and `AZN_ONLY` hold
 those two sets.
 
-`SETTLED_STATUSES` is what `ok` checks, and `USABLE_CARD_STATUSES` is the set a card has to be in
-before you can charge it.
+`OK_STATUSES` is what `Response.ok` checks. `SETTLED_STATUSES` is what `Callback.ok` checks, and
+`USABLE_CARD_STATUSES` is the set a card has to be in before you can charge it.
 
 ## Saving a card without a payment
 
@@ -152,13 +178,52 @@ store_card(registration["card_id"])
 The customer comes back to `success_redirect_url` or `error_redirect_url`, or to the client's own
 defaults when neither is given. A card can be charged once `get_card_status` reports it `active`.
 
+## Checkout form
+
+`/api/1/checkout` is a browser form post, not a JSON call. `checkout_form` takes the same
+arguments as `create_payment`, makes no request, and returns a `CheckoutForm` with the form action
+`url` and the signed `data` and `signature` fields. Render it as a form that submits itself, and
+epoint answers with a redirect to its card page:
+
+```python
+form = client.checkout_form(amount=30.75, order_id="order-1", description="Test order")
+html = f"""
+<form id="epoint" method="post" action="{form.url}">
+  <input type="hidden" name="data" value="{form.data}">
+  <input type="hidden" name="signature" value="{form.signature}">
+</form>
+<script>document.getElementById("epoint").submit()</script>
+"""
+```
+
+`form.fields` gives the two fields as a dict. `checkout_form` is synchronous on both clients.
+
+## B2B webhooks
+
+A B2B transfer created with `webhook_url` reports its result there as JSON with `order_id`,
+`status` (`success` or `failed`), `amount`, `payee_iban`, `payee_name` and `error_message`.
+`parse_b2b_webhook` turns the body, as a string, bytes or a dict, into a typed `B2BWebhook`.
+Unknown fields are ignored, and an unknown status is kept as a string.
+
+The docs define no signature for this webhook, so anyone can post one. Confirm the result with
+`get_bank_transfer` before acting on it:
+
+```python
+from epoint import parse_b2b_webhook
+
+hook = parse_b2b_webhook(request.body)
+confirmed = client.get_bank_transfer(hook.order_id)
+if confirmed.ok:
+    mark_paid(hook.order_id)
+```
+
 ## Methods
 
 | Group | Methods |
 |---|---|
-| Checkout | `create_payment`, `create_payment_request`, `create_amex_payment`, `change_payment_sum` |
+| Checkout | `create_payment`, `checkout_form`, `create_payment_request`, `create_amex_payment`, `change_payment_sum` |
 | Status | `get_status`, `get_card_status`, `get_bank_transfer` |
-| Split | `create_split_payment`, `split_charge_saved_card` |
+| Split | `create_split_payment`, `create_token_split_payment`, `split_charge_saved_card` |
 | Pre-auth | `reserve`, `capture` |
 | Saved cards | `register_card`, `register_card_and_pay`, `charge_saved_card` |
 | Money back | `refund`, `reverse` |
@@ -168,12 +233,19 @@ defaults when neither is given. A card can be charged once `get_card_status` rep
 | Invoices | `create_invoice`, `update_invoice`, `get_invoice`, `list_invoices`, `send_invoice_sms`, `send_invoice_email` |
 | B2B | `create_bank_transfer`, `get_bank_transfer` |
 | Health | `heartbeat` |
+| Webhooks | `verify_callback`, `parse_b2b_webhook` |
+
+`create_token_split_payment` posts to `/api/1/token/split-payment`, the split payment for Apple Pay
+and Google Pay, with the same arguments as `create_split_payment`. The docs give no field for the
+wallet token, so none is sent.
+
+Not supported: `invoice_images[]` on invoices. The docs give no way to send it.
 
 ## Errors
 
 | Exception | Raised when |
 |---|---|
-| `GatewayError` | epoint returned `status: error` or `failed`. Carries `code`, `message`, `payload`. |
+| `GatewayError` | epoint returned `status: error`, except a payment state on `get_status`. Carries `code`, `message`, `payload`. |
 | `TransportError` | Network failure, or a non-JSON or `4xx`/`5xx` response |
 | `SignatureError` | A callback's signature did not match, or its data would not decode |
 
