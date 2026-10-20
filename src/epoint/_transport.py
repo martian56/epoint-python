@@ -18,9 +18,16 @@ def build_json(public_key: str, private_key: str, payload: dict[str, Any]) -> di
     return build_form(public_key, private_key, payload)
 
 
-def parse(status_code: int, body: Any) -> Response:
+def is_payment_state(status_code: int, body: dict[str, Any]) -> bool:
+    return 200 <= status_code < 300 and body.get("status") == Status.ERROR and "transaction" in body
+
+
+def parse(status_code: int, body: Any, *, payment_status: bool = False) -> Response:
     if not isinstance(body, dict):
         raise TransportError(f"unexpected response body: {body!r}", status_code=status_code)
+
+    if payment_status and is_payment_state(status_code, body):
+        return Response(body)
 
     if body.get("status") == Status.ERROR:
         raise GatewayError(

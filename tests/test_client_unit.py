@@ -1,5 +1,6 @@
 import base64
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -212,3 +213,190 @@ def test_card_registration_falls_back_to_the_client_redirect_urls():
     client_with(handler).register_card()
     assert "success_redirect_url" not in seen
     assert "error_redirect_url" not in seen
+
+
+def recording_client(seen: dict, response: Any = None) -> EpointClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.clear()
+        seen["path"] = request.url.path
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = json.loads(request.content)
+            seen["payload"] = json.loads(base64.b64decode(body["data"]))
+        else:
+            seen["payload"], _ = decode_sent(request)
+        return httpx.Response(200, json={"status": "success"} if response is None else response)
+
+    return EpointClient(
+        PUBLIC_KEY,
+        PRIVATE_KEY,
+        base_url="https://epoint.test",
+        success_redirect_url="https://shop.test/default-ok",
+        error_redirect_url="https://shop.test/default-fail",
+        transport=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
+def test_get_status_returns_a_payment_that_ended_in_error():
+    body = {
+        "status": "error",
+        "code": "",
+        "message": "An error occurred during payment",
+        "transaction": "te1",
+    }
+    result = client_with(lambda request: httpx.Response(200, json=body)).get_status("te1")
+    assert result.status == "error"
+    assert result.message == "An error occurred during payment"
+    assert result.code == ""
+    assert not result.ok
+
+
+def test_other_calls_still_raise_on_error_with_a_transaction():
+    body = {"status": "error", "message": "bad", "transaction": "te1"}
+    with pytest.raises(GatewayError):
+        client_with(lambda request: httpx.Response(200, json=body)).create_payment(1, "o")
+
+
+def test_token_split_payment_payload():
+    seen: dict = {}
+    client = recording_client(seen)
+    client.create_token_split_payment(
+        amount=100, order_id="o-1", split_account="i000000002", split_amount=30
+    )
+    assert seen["path"] == "/api/1/token/split-payment"
+    payload = seen["payload"]
+    assert payload["amount"] == "100.00"
+    assert payload["split_user"] == "i000000002"
+    assert payload["split_amount"] == "30.00"
+    assert payload["currency"] == "AZN"
+    assert payload["language"] == "az"
+    assert payload["order_id"] == "o-1"
+    assert payload["success_redirect_url"] == "https://shop.test/default-ok"
+    assert payload["error_redirect_url"] == "https://shop.test/default-fail"
+
+    client.create_token_split_payment(
+        amount=10,
+        order_id="o-2",
+        split_account="i000000002",
+        split_amount=3,
+        description="share",
+        success_redirect_url="https://shop.test/ok",
+        other_attr={"k": "v"},
+    )
+    assert seen["payload"]["success_redirect_url"] == "https://shop.test/ok"
+    assert seen["payload"]["error_redirect_url"] == "https://shop.test/default-fail"
+    assert seen["payload"]["description"] == "share"
+    assert seen["payload"]["other_attr"] == {"k": "v"}
+
+
+def test_checkout_form_is_signed_and_makes_no_request():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("checkout_form must not send a request")
+
+    client = EpointClient(
+        PUBLIC_KEY,
+        PRIVATE_KEY,
+        base_url="https://epoint.test/",
+        success_redirect_url="https://shop.test/default-ok",
+        transport=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    form = client.checkout_form(
+        amount=30.75, order_id="o-1", description="Kilim", is_installment=True
+    )
+    assert form.url == "https://epoint.test/api/1/checkout"
+    assert matches(PRIVATE_KEY, form.data, form.signature)
+    assert form.fields == {"data": form.data, "signature": form.signature}
+    payload = json.loads(base64.b64decode(form.data))
+    assert payload == {
+        "public_key": PUBLIC_KEY,
+        "amount": "30.75",
+        "currency": "AZN",
+        "language": "az",
+        "order_id": "o-1",
+        "description": "Kilim",
+        "success_redirect_url": "https://shop.test/default-ok",
+        "is_installment": 1,
+    }
+
+
+@pytest.mark.parametrize(("value", "sent"), [(True, 1), (False, 0), (None, None)])
+def test_is_installment_is_sent_as_an_integer_or_omitted(value, sent):
+    seen: dict = {}
+    client = recording_client(seen)
+    for call, path in (
+        (client.create_payment, "/api/1/request"),
+        (client.create_payment_request, "/api/1/payment-request"),
+    ):
+        call(amount=1, order_id="o", is_installment=value)
+        assert seen["path"] == path
+        assert seen["payload"].get("is_installment") == sent
+        assert ("is_installment" in seen["payload"]) == (value is not None)
+
+    form = client.checkout_form(amount=1, order_id="o", is_installment=value)
+    payload = json.loads(base64.b64decode(form.data))
+    assert payload.get("is_installment") == sent
+    assert ("is_installment" in payload) == (value is not None)
+
+
+def test_bank_transfer_sends_bulk_description():
+    seen: dict = {}
+    recording_client(seen).create_bank_transfer(
+        order_id="b1",
+        amount=100,
+        description="fees",
+        iban="AZ21NABZ00000000137010001944",
+        name="ACME",
+        tin="1234567892",
+        bank_code="505141",
+        bulk_description="July payroll",
+    )
+    assert seen["path"] == "/api/1/b2b/payment"
+    assert seen["payload"]["bulk_description"] == "July payroll"
+
+
+def test_installment_plans_send_description_and_other_attr():
+    seen: dict = {}
+    recording_client(seen, []).get_installment_plans(
+        order_id="o", amount=200, description="sofa", other_attr={"k": "v"}
+    )
+    assert seen["path"] == "/api/1/get-installment-request"
+    assert seen["payload"]["description"] == "sofa"
+    assert seen["payload"]["other_attr"] == {"k": "v"}
+
+
+def test_pay_by_installment_sends_other_attr():
+    seen: dict = {}
+    recording_client(seen).pay_by_installment(
+        amount=200,
+        order_id="o",
+        installment_card_id="kapital",
+        installment_month=6,
+        other_attr={"k": "v"},
+    )
+    assert seen["path"] == "/api/1/installment-request"
+    assert seen["payload"]["other_attr"] == {"k": "v"}
+    assert seen["payload"]["installment_month"] == 6
+
+
+def test_update_invoice_sends_tin_contract_and_merchant_order():
+    seen: dict = {}
+    client = recording_client(seen)
+    client.update_invoice(
+        7,
+        amount=11,
+        period_from="2026-01-01",
+        period_to="2026-12-31",
+        tin="1234567892",
+        contract_number="C-1",
+        merchant_order_id="M-1",
+    )
+    assert seen["path"] == "/api/1/invoices/update"
+    payload = seen["payload"]
+    assert payload["id"] == 7
+    assert payload["inn"] == "1234567892"
+    assert payload["contract_number"] == "C-1"
+    assert payload["merchant_order_id"] == "M-1"
+
+    client.update_invoice(7, amount=11, period_from="2026-01-01", period_to="2026-12-31")
+    assert "inn" not in seen["payload"]
+    assert "contract_number" not in seen["payload"]
+    assert "merchant_order_id" not in seen["payload"]
